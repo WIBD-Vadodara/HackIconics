@@ -134,36 +134,67 @@ class LocationInput:
         return 0.0
 
 
-def get_location_from_ip() -> Optional[str]:
-    """
-    Auto-detect location via IP using wttr.in API.
-    
-    Returns: location string (city, region, country) or None if detection fails
-    """
+def _detect_via_ip_api() -> Optional[str]:
+    """Detect location using ip-api.com (free, no key required)."""
+    try:
+        resp = requests.get("http://ip-api.com/json/?fields=city,regionName,country", timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            parts = [v for v in (data.get("city"), data.get("regionName"), data.get("country")) if v]
+            if parts:
+                return ", ".join(parts)
+    except (requests.RequestException, ValueError):
+        pass
+    return None
+
+
+def _detect_via_ipapi_co() -> Optional[str]:
+    """Detect location using ipapi.co (free tier, no key required)."""
+    try:
+        resp = requests.get("https://ipapi.co/json/", timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            parts = [v for v in (data.get("city"), data.get("region"), data.get("country_name")) if v]
+            if parts:
+                return ", ".join(parts)
+    except (requests.RequestException, ValueError):
+        pass
+    return None
+
+
+def _detect_via_wttr() -> Optional[str]:
+    """Detect location using wttr.in weather service."""
     try:
         response = requests.get("https://wttr.in/?format=j1", timeout=5)
         if response.status_code == 200:
             data = response.json()
             nearest = data.get("nearest_area", [{}])[0]
-            
             city = nearest.get("areaName", [{}])[0].get("value")
             region = nearest.get("region", [{}])[0].get("value")
             country = nearest.get("country", [{}])[0].get("value")
-            
-            # Build location string with available components
-            parts = []
-            if city:
-                parts.append(city)
-            if region:
-                parts.append(region)
-            if country:
-                parts.append(country)
-            
-            return ", ".join(parts) if parts else None
+            parts = [v for v in (city, region, country) if v]
+            if parts:
+                return ", ".join(parts)
     except (requests.RequestException, KeyError, ValueError):
-        # Silently fail if IP detection doesn't work
         pass
-    
+    return None
+
+
+def get_location_from_ip() -> Optional[str]:
+    """
+    Auto-detect location via IP using a cascade of free services.
+
+    Order (fast → slow, high accuracy → acceptable):
+      1. ip-api.com   — fast, reliable, no key
+      2. ipapi.co      — solid backup
+      3. wttr.in       — last resort (heavier response)
+
+    Returns: "City, Region, Country" or None if every service fails.
+    """
+    for provider in (_detect_via_ip_api, _detect_via_ipapi_co, _detect_via_wttr):
+        result = provider()
+        if result:
+            return result
     return None
 
 
@@ -288,8 +319,15 @@ def is_location_ambiguous(location: Optional[str]) -> bool:
 
 
 def get_default_location() -> str:
-    """Return a sensible default location for demos."""
-    return "New York"
+    """
+    Return a sensible default location.
+
+    Tries IP-based geolocation first so the default is the user's
+    actual location, regardless of device.  Falls back to 'New York'
+    only when every detection service is unreachable.
+    """
+    detected = get_location_from_ip()
+    return detected if detected else "New York"
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -35,7 +35,8 @@ class TaskStep(BaseModel):
     """A single step in a plan."""
     order: int = Field(ge=1, description="Step order (1-indexed)")
     description: str = Field(description="What to do in this step")
-    time_suggestion: Optional[str] = Field(default=None, description="Suggested time (e.g., '10:00 AM')")
+    time_from: Optional[str] = Field(default=None, description="Start time as ISO 8601 datetime (YYYY-MM-DDTHH:MM)")
+    time_to: Optional[str] = Field(default=None, description="End time as ISO 8601 datetime (YYYY-MM-DDTHH:MM)")
     location: Optional[str] = Field(default=None, description="Where this step takes place")
     weather_sensitive: bool = Field(default=False, description="Is this step affected by weather?")
     risk_note: Optional[str] = Field(default=None, description="Weather-related risk for this step")
@@ -58,6 +59,13 @@ class DecisionPoint(BaseModel):
     data_used: Optional[str] = Field(default=None, description="What data informed this decision")
 
 
+class TaskFeasibility(BaseModel):
+    """Reality check: is the requested activity physically possible at the location?"""
+    feasible: bool = Field(description="Whether the activity is feasible at the given location")
+    reason: str = Field(description="Explanation of why the task is or is not feasible")
+    suggestion: Optional[str] = Field(default=None, description="Alternative suggestion when infeasible (e.g., nearest valid location)")
+
+
 class WeatherRelevance(BaseModel):
     """Agent's assessment of whether weather matters for this plan."""
     is_relevant: bool = Field(description="Does weather affect this plan?")
@@ -74,17 +82,21 @@ class ChronosResponse(BaseModel):
     # Input understanding
     original_request: str = Field(description="The user's original request")
     extracted_location: Optional[str] = Field(default=None, description="Location extracted from request")
-    extracted_date: Optional[str] = Field(default=None, description="Date extracted from request")
+    start_date: Optional[str] = Field(default=None, description="Start date of the plan (YYYY-MM-DD)")
+    end_date: Optional[str] = Field(default=None, description="End date of the plan (YYYY-MM-DD)")
     location_used: Optional[str] = Field(default=None, description="The actual location used for weather query")
     location_confidence: float = Field(default=1.0, ge=0, le=1, description="Confidence in location accuracy (0-1)")
+    
+    # Feasibility check (MUST be evaluated before planning)
+    task_feasibility: TaskFeasibility = Field(description="Reality check on whether the task is feasible at the location")
     
     # Weather assessment (set by code, not LLM)
     weather_relevance: Optional[WeatherRelevance] = Field(default=None, description="Assessment of weather relevance")
     weather_data: Optional[WeatherCondition] = Field(default=None, description="Weather data if fetched")
     
-    # Generated plans
-    plan_a: PlanOption = Field(description="Original plan with risks noted")
-    plan_b: PlanOption = Field(description="Weather-optimized alternative")
+    # Generated plans (only meaningful when task_feasibility.feasible is true)
+    plan_a: Optional[PlanOption] = Field(default=None, description="Original plan with risks noted")
+    plan_b: Optional[PlanOption] = Field(default=None, description="Weather-optimized alternative")
     
     # Decision trace
     decision_trace: list[DecisionPoint] = Field(default_factory=list, description="Key decisions and their reasoning")

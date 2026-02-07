@@ -90,7 +90,8 @@ async def fetch_weather_from_api(location: str, date: str) -> Optional[WeatherCo
     """
     Fetch weather from wttr.in API (free, no key required).
     
-    wttr.in provides simple weather data via a REST API.
+    wttr.in provides a 3-day forecast. If the requested date falls outside
+    that window the function returns None so the caller can fall back.
     """
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -100,46 +101,48 @@ async def fetch_weather_from_api(location: str, date: str) -> Optional[WeatherCo
             resp.raise_for_status()
             data = resp.json()
             
-            # Extract current condition and forecast
-            current = data.get("current_condition", [{}])[0]
             weather_list = data.get("weather", [])
             
-            # Find the forecast for the requested date or use current
+            # ── Find the exact forecast for the requested date ────────────
             forecast = None
             for w in weather_list:
                 if w.get("date") == date:
                     forecast = w
                     break
             
-            # Fall back to first forecast day if exact date not found
-            if not forecast and weather_list:
-                forecast = weather_list[0]
-            
+            # If the exact date isn't in the forecast window → give up
+            # (don't silently use a different day's data)
             if not forecast:
+                print(f"[Weather API] Date {date} not in wttr.in forecast window — skipping")
                 return None
             
-            # Extract temperature (average of max and min)
+            # ── Temperature (average of max and min for that day) ─────────
             temp_max = float(forecast.get("maxtempC", 20))
             temp_min = float(forecast.get("mintempC", 15))
             avg_temp = (temp_max + temp_min) / 2
             
-            # Get hourly data for precipitation and wind (use midday)
+            # ── Hourly slice — use midday (index 4 ≈ 12:00) ──────────────
             hourly = forecast.get("hourly", [])
             midday = hourly[4] if len(hourly) > 4 else hourly[0] if hourly else {}
             
-            # Weather description
-            condition = current.get("weatherDesc", [{}])[0].get("value", "partly cloudy").lower()
+            # ── Condition from the FORECAST day, not current_condition ────
+            # Try midday hourly description first (most representative)
+            condition = (
+                midday.get("weatherDesc", [{}])[0].get("value", "")
+                if midday
+                else ""
+            )
+            # Fallback: use the overall daily "astronomy"/"hourly" if empty
+            if not condition and hourly:
+                condition = hourly[0].get("weatherDesc", [{}])[0].get("value", "partly cloudy")
+            condition = condition.lower() if condition else "partly cloudy"
             
-            # Precipitation chance
+            # ── Precipitation, wind, humidity from the forecast day ───────
             precip_chance = int(midday.get("chanceofrain", 0))
-            
-            # Wind speed
             wind_speed = float(midday.get("windspeedKmph", 10))
-            
-            # Humidity
             humidity = int(midday.get("humidity", 65))
             
-            # Resolved location name
+            # ── Resolved location name ────────────────────────────────────
             nearest_area = data.get("nearest_area", [{}])[0]
             resolved_name = nearest_area.get("areaName", [{}])[0].get("value", location)
             

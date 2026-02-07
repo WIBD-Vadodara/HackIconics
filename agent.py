@@ -26,6 +26,7 @@ from models import (
     ChronosResponse,
     WeatherCondition,
     WeatherRelevance,
+    TaskFeasibility,
     PlanOption,
     TaskStep,
     DecisionPoint,
@@ -34,12 +35,6 @@ from models import (
 )
 from tools import get_weather
 from utils import (
-    parse_relative_date,
-    extract_location_from_text,
-    normalize_location,
-    LocationInput,
-    is_location_ambiguous,
-    get_default_location,
     classify_activity_weather_sensitivity,
     calculate_weather_risk,
     format_weather_summary,
@@ -68,14 +63,50 @@ CHRONOS_SYSTEM_PROMPT = """You are Chronos, a weather-adaptive planning assistan
 
 Your task is to help users optimize their plans based on weather conditions.
 
-## Your Process:
+## REALITY CHECK (MANDATORY — run BEFORE anything else):
+Before planning, you MUST validate whether the requested activity is physically
+possible at the given location. Examples of INFEASIBLE requests:
+- "Beach day in Anand" → Anand is an inland city with no beach
+- "Skiing in Mumbai" → Mumbai has no ski slopes
+- "Desert safari in Goa" → Goa is coastal, not desert
+
+If the task is NOT feasible:
+1. Set task_feasibility.feasible = false
+2. Clearly explain why in task_feasibility.reason
+3. Suggest a safe alternative (nearest valid location) in task_feasibility.suggestion
+4. Set weather_relevance.is_relevant = false
+5. Do NOT generate plan_a or plan_b — set both to null
+6. Do NOT hallucinate weather data or schedules
+
+If the task IS feasible:
+1. Set task_feasibility.feasible = true
+2. Briefly confirm why in task_feasibility.reason (e.g., "Miami has beaches")
+3. Proceed with planning normally
+
+## LOCATION RULES (STRICT):
+- The location is provided EXPLICITLY by the user via structured input
+- NEVER guess, infer, or hallucinate a location
+- Use ONLY the location given in the context below
+- Set location_used to the exact location provided
+- Set location_confidence to 1.0 (user-provided)
+
+## DATE RANGE RULES:
+- Plans may span one or more days (start_date to end_date inclusive)
+- For single-day requests start_date == end_date
+- ALL steps MUST have time_from and time_to within the given date range
+- NEVER schedule steps outside the date range
+- For multi-day plans, organize steps day-by-day in strict chronological order
+- Each step's time_from date portion MUST clearly indicate which day it belongs to
+- Group logically: morning activities before afternoon, Day 1 before Day 2, etc.
+
+## Your Process (only when feasible):
 1. UNDERSTAND the user's plan request
 2. DETERMINE if weather is relevant (outdoor activities, travel, events)
 3. If relevant, USE the weather data provided to you
 4. GENERATE two plan options:
    - Plan A: Original plan with honest risk assessment
    - Plan B: Weather-optimized alternative
-5. NOTE the location used for weather lookup and your confidence in its accuracy
+5. The location is always user-provided — do not override it
 
 ## Rules:
 - ALWAYS explain WHY you made each decision
@@ -83,22 +114,30 @@ Your task is to help users optimize their plans based on weather conditions.
 - Provide SPECIFIC, actionable steps (not vague advice)
 - If weather is bad, suggest alternatives (different time, backup venue, etc.)
 - Keep explanations concise but informative
-- Note if location was auto-detected or explicitly provided
-- Assess confidence in location accuracy (1.0 = certain, 0.5 = low confidence)
+- NEVER guess or infer a location — use only the explicitly provided location
+- For EVERY step, use explicit "time_from" and "time_to" fields in ISO 8601 format (YYYY-MM-DDTHH:MM)
+- NEVER output a combined time string like "08:00 - 10:00" — always use separate from/to fields
+- Both time_from and time_to must be provided together (either both present or both null)
+- ALL step times must fall within the given start_date to end_date range
 
 ## Output Requirements:
 - You MUST return ONLY valid JSON matching the schema below
 - All decisions must be traceable through the decision_trace
 - Risk levels must match the actual weather conditions
 - The recommended plan should be the one with lower risk
-- location_used: the actual location used for weather query
-- location_confidence: how confident you are in the location (0-1)
+- location_used: the exact location provided by the user
+- location_confidence: always 1.0 (user-provided location)
 
 ## JSON Output Schema:
 {
   "original_request": "string - the user's original request",
   "location_used": "string or null - the location used for weather",
   "location_confidence": 0.9,
+  "task_feasibility": {
+    "feasible": true,
+    "reason": "string - why the activity is or is not feasible at this location",
+    "suggestion": "string or null - alternative suggestion when infeasible"
+  },
   "plan_a": {
     "name": "string - plan name (e.g., 'Original Plan')",
     "summary": "string - one sentence summary",
@@ -106,7 +145,8 @@ Your task is to help users optimize their plans based on weather conditions.
       {
         "order": 1,
         "description": "string - what to do",
-        "time_suggestion": "string or null - e.g., '10:00 AM'",
+        "time_from": "string or null - ISO 8601 start datetime, e.g. '2026-02-08T10:00'",
+        "time_to": "string or null - ISO 8601 end datetime, e.g. '2026-02-08T12:00'",
         "location": "string or null",
         "weather_sensitive": true,
         "risk_note": "string or null"
@@ -180,18 +220,19 @@ def parse_agent_response(result_text: str) -> ChronosResponse:
 
 async def run_chronos(
     user_request: str,
+    location: str,
+    start_date: str,
+    end_date: str,
     simulation_mode: bool = False,
-    override_location: Optional[str] = None,
-    override_date: Optional[str] = None,
     model_name: str = "gemini-2.5-flash"
 ) -> ChronosResponse | AgentError:
     """
     Execute the Chronos planning flow.
     
     This is the main entry point that:
-    1. Extracts location and date from request
+    1. Uses the explicit location provided by the user
     2. Determines weather relevance
-    3. Fetches weather if needed
+    3. Fetches weather if needed (for each date in range)
     4. Runs the agent to generate plans
     5. Returns structured response
     
@@ -199,20 +240,11 @@ async def run_chronos(
     """
     try:
         # ─────────────────────────────────────────────────────────────────────
-        # Step 1: Extract context from request
+        # Step 1: Use explicit inputs (no inference)
         # ─────────────────────────────────────────────────────────────────────
         
-        # Location
-        location = override_location or extract_location_from_text(user_request)
-        if is_location_ambiguous(location):
-            location = get_default_location()
-        
-        # Date
-        date = override_date or parse_relative_date(user_request)
-        if not date:
-            # Default to tomorrow
-            from datetime import datetime, timedelta
-            date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+        # Location is always user-provided — no guessing
+        location = location.strip()
         
         # ─────────────────────────────────────────────────────────────────────
         # Step 2: Determine weather relevance
@@ -239,7 +271,8 @@ async def run_chronos(
         decision_trace: list[DecisionPoint] = []
         
         if is_weather_relevant:
-            weather_data = await get_weather(location, date, use_simulation=simulation_mode)
+            # Fetch weather for the start date (primary planning day)
+            weather_data = await get_weather(location, start_date, use_simulation=simulation_mode)
             
             decision_trace.append(DecisionPoint(
                 decision="Fetched weather data",
@@ -261,7 +294,8 @@ async def run_chronos(
         context_prompt = build_agent_prompt(
             user_request=user_request,
             location=location,
-            date=date,
+            start_date=start_date,
+            end_date=end_date,
             weather_data=weather_data,
             weather_relevance=weather_relevance
         )
@@ -272,25 +306,15 @@ async def run_chronos(
         
         # Enrich response with pre-computed data
         response.extracted_location = location
-        response.extracted_date = date
+        response.start_date = start_date
+        response.end_date = end_date
         response.weather_relevance = weather_relevance
         response.weather_data = weather_data
         response.decision_trace = decision_trace + response.decision_trace
         
-        # Set location tracking (if not set by agent)
-        if not response.location_used:
-            response.location_used = location
-        
-        # Calculate location confidence based on how it was provided
-        if override_location:
-            response.location_confidence = 1.0  # Explicit location provided by UI
-        else:
-            # If extracted from text or defaulted, lower confidence
-            from utils import LocationInput
-            loc_input = LocationInput(
-                city=location if location == location else None
-            )
-            response.location_confidence = loc_input.confidence()
+        # Location is always explicit — set deterministically
+        response.location_used = location
+        response.location_confidence = 1.0
         
         return response
         
@@ -307,17 +331,23 @@ async def run_chronos(
 def build_agent_prompt(
     user_request: str,
     location: str,
-    date: str,
+    start_date: str,
+    end_date: str,
     weather_data: Optional[WeatherCondition],
     weather_relevance: WeatherRelevance
 ) -> str:
     """Build the full prompt for the agent with all context."""
     
+    if start_date == end_date:
+        date_display = f"{format_date_human(start_date)} ({start_date})"
+    else:
+        date_display = f"{format_date_human(start_date)} to {format_date_human(end_date)} ({start_date} to {end_date})"
+    
     prompt_parts = [
         f"## User Request\n{user_request}",
-        f"\n## Extracted Context",
+        f"\n## Provided Context (user-supplied — do NOT override)",
         f"- Location: {location}",
-        f"- Date: {format_date_human(date)} ({date})",
+        f"- Date range: {date_display}",
     ]
     
     prompt_parts.append(f"\n## Weather Relevance Assessment")
@@ -335,13 +365,19 @@ def build_agent_prompt(
         prompt_parts.append(f"- Humidity: {weather_data.humidity_percent}%")
         prompt_parts.append(f"- Calculated risk level: {risk_level.value}")
         if weather_data.is_simulated:
-            prompt_parts.append("- Note: This is simulated weather data")
+            prompt_parts.append("- **WARNING: This is ESTIMATED weather data (forecast unavailable for this date). Do NOT present these numbers as real. Clearly tell the user the forecast is an estimate.**")
     
     prompt_parts.append("\n## Your Task")
-    prompt_parts.append("Generate a ChronosResponse with two plan options.")
+    prompt_parts.append("FIRST: Perform the REALITY CHECK. Decide whether the activity is physically feasible at the location.")
+    prompt_parts.append("Fill in 'task_feasibility' BEFORE generating any plans.")
+    prompt_parts.append("If infeasible: set plan_a and plan_b to null, do NOT invent schedules or weather.")
+    prompt_parts.append("If feasible: generate a ChronosResponse with two plan options.")
     prompt_parts.append("Plan A should be the original plan with honest risk assessment.")
     prompt_parts.append("Plan B should be a weather-optimized alternative.")
     prompt_parts.append("Include a decision trace explaining each key decision.")
+    prompt_parts.append("IMPORTANT: For every step, use 'time_from' and 'time_to' fields in ISO 8601 format (YYYY-MM-DDTHH:MM). NEVER use a combined time string.")
+    prompt_parts.append(f"IMPORTANT: ALL step times MUST fall within {start_date} to {end_date} (inclusive). Do NOT schedule outside this range.")
+    prompt_parts.append("IMPORTANT: Use ONLY the location provided above. Do NOT guess or change it.")
     
     return "\n".join(prompt_parts)
 
@@ -380,6 +416,8 @@ def generate_fallback_response(
             TaskStep(
                 order=1,
                 description=f"Proceed with: {user_request}",
+                time_from=f"{date}T09:00",
+                time_to=f"{date}T17:00",
                 weather_sensitive=True,
                 risk_note=f"Weather risk: {risk_level.value}"
             )
@@ -396,11 +434,15 @@ def generate_fallback_response(
             TaskStep(
                 order=1,
                 description="Check weather before leaving",
+                time_from=f"{date}T08:00",
+                time_to=f"{date}T08:30",
                 weather_sensitive=False
             ),
             TaskStep(
                 order=2,
                 description=f"Proceed with: {user_request}",
+                time_from=f"{date}T09:00",
+                time_to=f"{date}T17:00",
                 weather_sensitive=True,
                 risk_note="Have a backup plan ready"
             )
@@ -413,7 +455,13 @@ def generate_fallback_response(
     return ChronosResponse(
         original_request=user_request,
         extracted_location=location,
-        extracted_date=date,
+        start_date=date,
+        end_date=date,
+        task_feasibility=TaskFeasibility(
+            feasible=True,
+            reason="Fallback mode — feasibility not evaluated",
+            suggestion=None
+        ),
         weather_relevance=weather_relevance,
         weather_data=weather_data,
         plan_a=plan_a,
