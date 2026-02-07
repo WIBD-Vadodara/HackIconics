@@ -75,6 +75,8 @@ class ChronosResponse(BaseModel):
     original_request: str = Field(description="The user's original request")
     extracted_location: Optional[str] = Field(default=None, description="Location extracted from request")
     extracted_date: Optional[str] = Field(default=None, description="Date extracted from request")
+    location_used: Optional[str] = Field(default=None, description="The actual location used for weather query")
+    location_confidence: float = Field(default=1.0, ge=0, le=1, description="Confidence in location accuracy (0-1)")
     
     # Weather assessment (set by code, not LLM)
     weather_relevance: Optional[WeatherRelevance] = Field(default=None, description="Assessment of weather relevance")

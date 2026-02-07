@@ -24,7 +24,8 @@ from utils import (
     get_risk_color,
     format_date_human,
     format_weather_summary,
-    get_default_location
+    get_default_location,
+    normalize_location
 )
 
 
@@ -204,13 +205,31 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # Optional overrides
-    st.markdown("### 📍 Optional Overrides")
+    # Structured location input
+    st.markdown("### 📍 Location")
     
-    override_location = st.text_input(
-        "Location",
-        placeholder="e.g., San Francisco",
-        help="Override auto-detected location"
+    location_city = st.text_input(
+        "City",
+        placeholder="e.g., Vadodara",
+        help="City name (optional)"
+    )
+    
+    location_state = st.text_input(
+        "State / Region",
+        placeholder="e.g., Gujarat",
+        help="State or region (optional)"
+    )
+    
+    location_country = st.text_input(
+        "Country",
+        placeholder="e.g., India",
+        help="Country name (optional)"
+    )
+    
+    auto_detect_location = st.checkbox(
+        "Auto-detect my location if empty",
+        value=True,
+        help="Use IP geolocation to detect location if no manual input is provided"
     )
     
     override_date = st.date_input(
@@ -290,8 +309,23 @@ with generate_col2:
 
 if generate_clicked and user_input:
     with st.spinner("🤔 Chronos is analyzing your plan and checking weather conditions..."):
-        # Prepare overrides
-        location_override = override_location if override_location else None
+        # Build location from structured inputs
+        try:
+            location_override = normalize_location(
+                city=location_city.strip() if location_city else None,
+                state=location_state.strip() if location_state else None,
+                country=location_country.strip() if location_country else None,
+                auto_detect=auto_detect_location
+            )
+        except ValueError as e:
+            st.error(f"Location error: {str(e)}")
+            location_override = None
+        
+        # Check if location is required but missing
+        if not location_override and not auto_detect_location:
+            st.warning("⚠️ Please provide a location or enable auto-detect.")
+            st.stop()
+        
         date_override = override_date.strftime("%Y-%m-%d") if override_date else None
         
         # Run the agent
@@ -345,7 +379,7 @@ if st.session_state.response:
         
         # Context summary
         st.markdown("### 📋 Request Analysis")
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             st.metric("📍 Location", response.extracted_location or "Not specified")
@@ -354,10 +388,18 @@ if st.session_state.response:
         with col3:
             relevance_text = "Yes" if response.weather_relevance.is_relevant else "No"
             st.metric("🌤️ Weather Relevant", relevance_text)
+        with col4:
+            confidence_pct = f"{int(response.location_confidence * 100)}%"
+            st.metric("📍 Location Confidence", confidence_pct)
         
         # Weather info (if fetched)
         if response.weather_data:
             display_weather_info(response.weather_data)
+        
+        # Show location_used if different from extracted_location
+        if response.location_used and response.location_used != response.extracted_location:
+            st.info(f"📍 Using location: **{response.location_used}**" + 
+                   (f" (confidence: {int(response.location_confidence * 100)}%)" if response.location_confidence < 1.0 else ""))
         
         st.markdown("---")
         

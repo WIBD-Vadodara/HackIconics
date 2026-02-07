@@ -13,7 +13,14 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
+from dotenv import load_dotenv
 from pydantic_ai import Agent
+
+load_dotenv()  # Load environment variables from .env file
+
+# Set GOOGLE_API_KEY for pydantic_ai if GEMINI_API_KEY is available
+if "GOOGLE_API_KEY" not in os.environ and "GEMINI_API_KEY" in os.environ:
+    os.environ["GOOGLE_API_KEY"] = os.environ["GEMINI_API_KEY"]
 
 from models import (
     ChronosResponse,
@@ -28,7 +35,9 @@ from models import (
 from tools import get_weather
 from utils import (
     parse_relative_date,
-    extract_location,
+    extract_location_from_text,
+    normalize_location,
+    LocationInput,
     is_location_ambiguous,
     get_default_location,
     classify_activity_weather_sensitivity,
@@ -66,6 +75,7 @@ Your task is to help users optimize their plans based on weather conditions.
 4. GENERATE two plan options:
    - Plan A: Original plan with honest risk assessment
    - Plan B: Weather-optimized alternative
+5. NOTE the location used for weather lookup and your confidence in its accuracy
 
 ## Rules:
 - ALWAYS explain WHY you made each decision
@@ -73,16 +83,22 @@ Your task is to help users optimize their plans based on weather conditions.
 - Provide SPECIFIC, actionable steps (not vague advice)
 - If weather is bad, suggest alternatives (different time, backup venue, etc.)
 - Keep explanations concise but informative
+- Note if location was auto-detected or explicitly provided
+- Assess confidence in location accuracy (1.0 = certain, 0.5 = low confidence)
 
 ## Output Requirements:
 - You MUST return ONLY valid JSON matching the schema below
 - All decisions must be traceable through the decision_trace
 - Risk levels must match the actual weather conditions
 - The recommended plan should be the one with lower risk
+- location_used: the actual location used for weather query
+- location_confidence: how confident you are in the location (0-1)
 
 ## JSON Output Schema:
 {
   "original_request": "string - the user's original request",
+  "location_used": "string or null - the location used for weather",
+  "location_confidence": 0.9,
   "plan_a": {
     "name": "string - plan name (e.g., 'Original Plan')",
     "summary": "string - one sentence summary",
@@ -187,7 +203,7 @@ async def run_chronos(
         # ─────────────────────────────────────────────────────────────────────
         
         # Location
-        location = override_location or extract_location(user_request)
+        location = override_location or extract_location_from_text(user_request)
         if is_location_ambiguous(location):
             location = get_default_location()
         
@@ -260,6 +276,21 @@ async def run_chronos(
         response.weather_relevance = weather_relevance
         response.weather_data = weather_data
         response.decision_trace = decision_trace + response.decision_trace
+        
+        # Set location tracking (if not set by agent)
+        if not response.location_used:
+            response.location_used = location
+        
+        # Calculate location confidence based on how it was provided
+        if override_location:
+            response.location_confidence = 1.0  # Explicit location provided by UI
+        else:
+            # If extracted from text or defaulted, lower confidence
+            from utils import LocationInput
+            loc_input = LocationInput(
+                city=location if location == location else None
+            )
+            response.location_confidence = loc_input.confidence()
         
         return response
         

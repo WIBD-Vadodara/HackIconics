@@ -9,8 +9,10 @@ Keeps agent.py clean by handling:
 """
 
 import re
+import requests
 from datetime import datetime, timedelta
 from typing import Optional
+from dataclasses import dataclass
 
 from models import RiskLevel, WeatherCondition
 
@@ -89,36 +91,168 @@ def format_date_human(date_str: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Location Detection
+# Location Input & Detection
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Common location indicators
-LOCATION_PREPOSITIONS = ["in", "at", "near", "around", "to"]
+@dataclass
+class LocationInput:
+    """Structured location input with multiple levels of specificity."""
+    city: Optional[str] = None
+    state: Optional[str] = None
+    country: Optional[str] = None
+    auto_detect: bool = False
+    
+    def __str__(self) -> str:
+        """Generate location string from available components."""
+        parts = []
+        if self.city:
+            parts.append(self.city)
+        if self.state:
+            parts.append(self.state)
+        if self.country:
+            parts.append(self.country)
+        return ", ".join(parts) if parts else None
+    
+    def is_empty(self) -> bool:
+        """Check if no explicit location is provided."""
+        return not self.city and not self.state and not self.country
+    
+    def confidence(self) -> float:
+        """
+        Calculate input confidence (0.0 to 1.0).
+        City only: 1.0 (strongest signal)
+        City + State/Country: 0.9
+        State + Country: 0.7 (weaker signal)
+        Country only: 0.5
+        """
+        if self.city:
+            return 1.0 if (self.state or self.country) else 0.95
+        elif self.state and self.country:
+            return 0.7
+        elif self.country:
+            return 0.5
+        return 0.0
 
-# Known city names (subset for quick matching)
-COMMON_CITIES = {
-    "new york", "los angeles", "chicago", "houston", "phoenix", "philadelphia",
-    "san antonio", "san diego", "dallas", "san jose", "austin", "seattle",
-    "denver", "boston", "miami", "atlanta", "london", "paris", "tokyo",
-    "sydney", "toronto", "vancouver", "berlin", "madrid", "rome", "amsterdam"
-}
+
+def get_location_from_ip() -> Optional[str]:
+    """
+    Auto-detect location via IP using wttr.in API.
+    
+    Returns: location string (city, region, country) or None if detection fails
+    """
+    try:
+        response = requests.get("https://wttr.in/?format=j1", timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            nearest = data.get("nearest_area", [{}])[0]
+            
+            city = nearest.get("areaName", [{}])[0].get("value")
+            region = nearest.get("region", [{}])[0].get("value")
+            country = nearest.get("country", [{}])[0].get("value")
+            
+            # Build location string with available components
+            parts = []
+            if city:
+                parts.append(city)
+            if region:
+                parts.append(region)
+            if country:
+                parts.append(country)
+            
+            return ", ".join(parts) if parts else None
+    except (requests.RequestException, KeyError, ValueError):
+        # Silently fail if IP detection doesn't work
+        pass
+    
+    return None
 
 
-def extract_location(text: str) -> Optional[str]:
+def normalize_location(
+    city: Optional[str] = None,
+    state: Optional[str] = None,
+    country: Optional[str] = None,
+    text_input: Optional[str] = None,
+    auto_detect: bool = False
+) -> Optional[str]:
+    """
+    Normalize location from UI inputs following priority order:
+    
+    Priority 1 (Explicit):
+    - If city provided → return immediately (strongest signal)
+    - If state + country → combine them
+    - If country only → return country
+    
+    Priority 2 (Partial):
+    - Parse text_input for "City, State/Country" or "City, Country" patterns
+    - Extract recognized cities
+    
+    Priority 3 (Implicit):
+    - If auto_detect=True → use IP geolocation
+    - If auto_detect=False and all empty → return None with warning
+    
+    Returns: formatted location string suitable for weather_tool()
+    """
+    
+    # Priority 1: Explicit inputs with strongest signal first
+    if city:
+        # City is the strongest signal
+        parts = [city.strip()]
+        if state:
+            parts.append(state.strip())
+        if country:
+            parts.append(country.strip())
+        return ", ".join(parts)
+    
+    # Second strongest: state + country combination
+    if state and country:
+        return f"{state.strip()}, {country.strip()}"
+    
+    # Single country
+    if country:
+        return country.strip()
+    
+    # Priority 2: Parse text input for partial location patterns
+    if text_input:
+        location = extract_location_from_text(text_input)
+        if location:
+            return location
+    
+    # Priority 3: Auto-detect via IP or fail
+    if auto_detect:
+        detected = get_location_from_ip()
+        if detected:
+            return detected
+        # Fall through to None if detection fails
+    
+    return None
+
+
+def extract_location_from_text(text: str) -> Optional[str]:
     """
     Extract location from natural language text.
     
-    Returns the most likely location string, or None if ambiguous/not found.
+    Handles patterns like:
+    - "Vadodara" (city only)
+    - "Gujarat, India" (state, country)
+    - "New York, USA" (city, country)
     """
-    text_lower = text.lower()
+    text_lower = text.lower().strip()
     
-    # Check for known cities first
+    # Check for known cities first (strongest partial signal)
     for city in COMMON_CITIES:
         if city in text_lower:
             return city.title()
     
+    # Look for "City, State" or "City, Country" patterns
+    if "," in text:
+        parts = [p.strip() for p in text.split(",")]
+        if len(parts) >= 2:
+            # Assume format: [City/State], [State/Country/Country]
+            return ", ".join(parts).title()
+    
     # Look for "in/at/near [Location]" patterns
-    for prep in LOCATION_PREPOSITIONS:
+    location_prepositions = ["in", "at", "near", "around", "to"]
+    for prep in location_prepositions:
         pattern = rf'\b{prep}\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)'
         match = re.search(pattern, text)
         if match:
@@ -129,6 +263,19 @@ def extract_location(text: str) -> Optional[str]:
                 return location
     
     return None
+
+
+# Common location indicators
+LOCATION_PREPOSITIONS = ["in", "at", "near", "around", "to"]
+
+# Known city names (subset for quick matching)
+COMMON_CITIES = {
+    "new york", "los angeles", "chicago", "houston", "phoenix", "philadelphia",
+    "san antonio", "san diego", "dallas", "san jose", "austin", "seattle",
+    "denver", "boston", "miami", "atlanta", "london", "paris", "tokyo",
+    "sydney", "toronto", "vancouver", "berlin", "madrid", "rome", "amsterdam",
+    "vadodara", "mumbai", "delhi", "bangalore", "hyderabad", "pune", "kolkata"
+}
 
 
 def is_location_ambiguous(location: Optional[str]) -> bool:
