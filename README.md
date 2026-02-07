@@ -46,24 +46,24 @@ Chronos is a weather-intelligent planning companion that fuses large-language-mo
 
 ---
 
-## Setup Instructions
+## 🚀 Setup Instructions
 
-### Prerequisites
+### 📋 Prerequisites
 Before starting, ensure you have the following installed on your laptop:
-- **Python 3.10+** ([Download here](https://www.python.org/downloads/))
-- **Git** ([Download here](https://git-scm.com/))
-- A **Google Gemini API key** ([Get it here](https://aistudio.google.com/app/apikey))
+- 🐍 **Python 3.10+** ([Download here](https://www.python.org/downloads/))
+- 🔧 **Git** ([Download here](https://git-scm.com/))
+- 🔑 **Google Gemini API key** ([Get it here](https://aistudio.google.com/app/apikey))
 
-### Quick Start (4 Simple Steps)
+### ⚡ Quick Start (4 Simple Steps)
 
-#### Step 1: Clone the Repository
+#### Step 1️⃣ Clone the Repository
 Copy the project to your laptop:
 ```bash
 git clone https://github.com/WIBD-Vadodara/HackIconics.git
 cd HackIconics
 ```
 
-#### Step 2: Set Up Python Virtual Environment
+#### Step 2️⃣ Set Up Python Virtual Environment
 Create an isolated environment for the project:
 
 **On Windows (PowerShell):**
@@ -78,13 +78,13 @@ python -m venv .venv
 source .venv/bin/activate
 ```
 
-#### Step 3: Install Dependencies
+#### Step 3️⃣ Install Dependencies
 Install all required packages:
 ```bash
 pip install -r requirements.txt
 ```
 
-#### Step 4: Configure API Key
+#### Step 4️⃣ Configure API Key
 Create a `.env` file in the project root and add your Google Gemini API key:
 ```bash
 # Create the .env file
@@ -100,19 +100,19 @@ GEMINI_API_KEY=your-api-key-here
 
 Replace `your-api-key-here` with your actual Google Gemini API key.
 
-### Run the Application
+### ▶️ Run the Application
 Once setup is complete, start the application:
 ```bash
 streamlit run app.py
 ```
 
-The app will open automatically in your browser at `http://localhost:8501`
+✨ The app will open automatically in your browser at `http://localhost:8501`
 
 ---
 
-### Troubleshooting
+### 🆘 Troubleshooting
 
-| Issue | Solution |
+| ❓ Issue | ✅ Solution |
 |-------|----------|
 | Python command not found | Ensure Python is installed and added to PATH. Restart your terminal. |
 | `.venv` not activating | Use `python -m venv .venv` again, then activate it. |
@@ -120,14 +120,14 @@ The app will open automatically in your browser at `http://localhost:8501`
 | API key errors | Double-check your `.env` file has the correct format: `GEMINI_API_KEY=<your-key>`. |
 | Port 8501 already in use | Run `streamlit run app.py --server.port 8502` to use a different port. |
 
-### Optional: Demo Mode
+### 🎮 Optional: Demo Mode
 To test the app without an API key (using simulated weather data):
 ```bash
 echo "SIMULATION_MODE=true" >> .env
 streamlit run app.py
 ```
 
-### Optional: Advanced Deployment
+### 🌐 Optional: Advanced Deployment
 For deployment servers, use headless mode:
 ```bash
 streamlit run app.py --server.headless true --server.port 8080
@@ -135,35 +135,35 @@ streamlit run app.py --server.headless true --server.port 8080
 
 ---
 
-## Repository Structure
-- /app.py → Streamlit UI, session state, and rendering logic
-- /agent.py → pydantic-ai agent orchestration and prompt builder
-- /models.py → Typed response schema shared between UI and agent
-- /tools.py → Weather tooling, caching, and wttr.in adapter
-- /utils.py → Location parsing, classification, and risk helpers
-- /assets → Branding, screenshots, or architecture diagrams
-- /requirements.txt → Python dependencies
-- /README.md format.md → Reference template supplied by organizers
+## 📁 Repository Structure
+- 🎨 `/app.py` → Streamlit UI, session state, and rendering logic
+- 🤖 `/agent.py` → pydantic-ai agent orchestration and prompt builder
+- 📊 `/models.py` → Typed response schema shared between UI and agent
+- ⛅ `/tools.py` → Weather tooling, caching, and wttr.in adapter
+- 🛠️ `/utils.py` → Location parsing, classification, and risk helpers
+- 📦 `/assets` → Branding, screenshots, or architecture diagrams
+- 📝 `/requirements.txt` → Python dependencies
+- 📖 `/README.md` → Reference template supplied by organizers
 
 ---
 
-## Team Members
-- Nancy Vaghela – [@nancy325](https://github.com/nancy325) · nancysvaghela@gmail.com
-- Bhakti Moteriya – [@Bhakti1112](https://github.com/Bhakti1112) · bhaktimoteriya465@gmail.com
-- Isha Patel – [@Isha1530](https://github.com/Isha1530) · ishahp150305@gmail.com
-- Arya Mehta – [@aryamehta0302](https://github.com/aryamehta0302) · aryamehta0302@gmail.com
+## 👥 Team Members
+- 👩‍💻 Nancy Vaghela – [@nancy325](https://github.com/nancy325) · nancysvaghela@gmail.com
+- 👩‍💻 Bhakti Moteriya – [@Bhakti1112](https://github.com/Bhakti1112) · bhaktimoteriya465@gmail.com
+- 👩‍💻 Isha Patel – [@Isha1530](https://github.com/Isha1530) · ishahp150305@gmail.com
+- 👨‍💻 Arya Mehta – [@aryamehta0302](https://github.com/aryamehta0302) · aryamehta0302@gmail.com
 
 ---
 
-## Notes / Assumptions
-- Explicit city/state/country inputs always override auto-detect; the agent never invents or infers missing locations.
-- wttr.in provides three-day forecasts; for longer horizons, Chronos switches to clearly labeled simulated estimates to avoid misinformation.
-- Plans and decision traces live in Streamlit session state only—no external database is provisioned to keep the footprint light for the hackathon.
-- IP detection relies on free tiers (ip-api, ipapi, wttr); excessive requests may trigger throttling, so manual entry remains available.
-- **Future Vision (from PPT)**: Extend Chronos beyond personal planning into logistics optimization, emergency response scheduling, and field operations coordination wherever weather, time, and critical decisions intersect.
-- **Roadmap Ideas**: Calendar integrations, proactive alerts, multi-user persistence, geospatial feasibility datasets, and richer “programmatic empathy” rules for edge-case conditions.
+## 💡 Notes / Assumptions
+- 📍 Explicit city/state/country inputs always override auto-detect; the agent never invents or infers missing locations.
+- 📅 wttr.in provides three-day forecasts; for longer horizons, Chronos switches to clearly labeled simulated estimates to avoid misinformation.
+- 💾 Plans and decision traces live in Streamlit session state only—no external database is provisioned to keep the footprint light for the hackathon.
+- 🌍 IP detection relies on free tiers (ip-api, ipapi, wttr); excessive requests may trigger throttling, so manual entry remains available.
+- 🚀 **Future Vision (from PPT)**: Extend Chronos beyond personal planning into logistics optimization, emergency response scheduling, and field operations coordination wherever weather, time, and critical decisions intersect.
+- 📈 **Roadmap Ideas**: Calendar integrations, proactive alerts, multi-user persistence, geospatial feasibility datasets, and richer "programmatic empathy" rules for edge-case conditions.
 
 ---
 
-## Submission Declaration
+## ✨ Submission Declaration
 This project was developed as part of **WiBD GenAI Hackathon 2026** and all code was written during the hackathon period.
