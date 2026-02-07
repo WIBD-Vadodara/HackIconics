@@ -45,15 +45,10 @@ Steps to run the project locally:
 
 ---
 
-## Demo
-- Demo Video Link: *(to be added before final submission)*
-
----
-
 ## Repository Structure
-/code → Source code
-/docs → PPT, reports, architecture details
-/assets → Images, screenshots, diagrams
+- /code → Source code
+- /docs → PPT, reports, architecture details
+- /assets → Images, screenshots, diagrams
 
 
 ---
